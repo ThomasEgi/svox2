@@ -1099,6 +1099,7 @@ class SparseGrid(nn.Module):
             _C is not None and self.sh_data.is_cuda
         ), "CUDA extension is currently required for fused"
         assert rays.is_cuda
+        ##TODO: _get_data_grads() requires a lot of gpu data allocation. reduce
         grad_density, grad_sh, grad_basis, grad_bg = self._get_data_grads()
         rgb_out = torch.zeros_like(rgb_gt)
         basis_data : Optional[torch.Tensor] = None
@@ -1124,6 +1125,14 @@ class SparseGrid(nn.Module):
 
         cu_fn = _C.__dict__[f"volume_render_{self.opt.backend}_fused"]
         #  with utils.Timing("actual_render"):
+        #print("basis_data",basis_data)
+        #print("rays",rays)
+        #print("self.opt",self.opt)
+        #print("rgb_gt",rgb_gt)
+        #print("beta_loss",beta_loss)
+        #print("sparsity_loss",sparsity_loss)
+        #print("rgb_out",rgb_out)
+        #print("grad_holder",grad_holder)
         cu_fn(
             self._to_cpp(replace_basis_data=basis_data),
             rays._to_cpp(),
@@ -1289,21 +1298,28 @@ class SparseGrid(nn.Module):
             points = torch.stack((X, Y, Z), dim=-1).view(-1, 3)
 
             if use_z_order:
+                print("using morton point ordering")
                 morton = utils.gen_morton(reso[0], dtype=torch.long).view(-1)
                 points[morton] = points.clone()
-            points = points.to(device=device)
+            #keep the big point cloud on cpu-ram , these are just xyz coordinates to sample densities.
+            #easily sums up fast. e.g. 512x512x512 grid ; x4 byte for float type; x3 for coords =1.5 gigs of gpu memory. nothx on my 1050ti
+            #points = points.to(device=device)
 
             use_weight_thresh = cameras is not None
 
-            batch_size = 720720
+            batch_size = 120720
             all_sample_vals_density = []
             print('Pass 1/2 (density)')
             for i in tqdm(range(0, len(points), batch_size)):
+                #extract a slic
+                tpoints = points[i : i + batch_size].clone()
+                tpoints = tpoints.to(device=device)
                 sample_vals_density, _ = self.sample(
-                    points[i : i + batch_size],
+                    tpoints, 
                     grid_coords=True,
                     want_colors=False
                 )
+                del tpoints
                 sample_vals_density = sample_vals_density
                 all_sample_vals_density.append(sample_vals_density)
             self.density_data.grad = None
@@ -1346,9 +1362,14 @@ class SparseGrid(nn.Module):
                     #  np.save(f"wmax_vol/wmax_view{i:05d}.npy", tmp_wt_grid.detach().cpu().numpy())
                 #  import sys
                 #  sys.exit(0)
+                #shave a bit more memory off the gpu, the count_nonzero test apparently allocates a lot of memory for the test (~1G for 512^3 grid) in my test
+                #copy to cpu/ram first as there's usualy more main memory than gpu mem. since this is a one-off operation who cares if it is slow-ish.
                 sample_vals_mask = max_wt_grid >= weight_thresh
+                sample_vals_mask_nonzerotest = sample_vals_mask.to(device=torch.device("cpu"))
+                #more memory-saving copying
+                max_wt_grid = max_wt_grid.to(device=torch.device("cpu"))
                 if max_elements > 0 and max_elements < max_wt_grid.numel() \
-                                    and max_elements < torch.count_nonzero(sample_vals_mask):
+                                    and max_elements < torch.count_nonzero(sample_vals_mask_nonzerotest):
                     # To bound the memory usage
                     weight_thresh_bounded = torch.topk(max_wt_grid.view(-1),
                                      k=max_elements, sorted=False).values.min().item()
@@ -1356,10 +1377,12 @@ class SparseGrid(nn.Module):
                     print(' Readjusted weight thresh to fit to memory:', weight_thresh)
                     sample_vals_mask = max_wt_grid >= weight_thresh
                 del max_wt_grid
+                
             else:
                 sample_vals_mask = sample_vals_density >= sigma_thresh
+                sample_vals_mask_nonzerotest = sample_vals_mask.to(device=torch.device("cpu"))
                 if max_elements > 0 and max_elements < sample_vals_density.numel() \
-                                    and max_elements < torch.count_nonzero(sample_vals_mask):
+                                    and max_elements < torch.count_nonzero(sample_vals_mask_nonzerotest):
                     # To bound the memory usage
                     sigma_thresh_bounded = torch.topk(sample_vals_density.view(-1),
                                      k=max_elements, sorted=False).values.min().item()
@@ -1371,9 +1394,12 @@ class SparseGrid(nn.Module):
                     # Don't delete the last z layer
                     sample_vals_mask[:, :, -1] = 1
 
+            #bit more memory saving, almost done here.
             if dilate:
+                sample_vals_mask = sample_vals_mask.to(device=device)
                 for i in range(int(dilate)):
                     sample_vals_mask = _C.dilate(sample_vals_mask)
+                sample_vals_mask = sample_vals_mask.to(device=torch.device("cpu"))
             sample_vals_mask = sample_vals_mask.view(-1)
             sample_vals_density = sample_vals_density.view(-1)
             sample_vals_density = sample_vals_density[sample_vals_mask]
@@ -1384,14 +1410,24 @@ class SparseGrid(nn.Module):
             print('Pass 2/2 (color), eval', cnz, 'sparse pts')
             all_sample_vals_sh = []
             for i in tqdm(range(0, len(points), batch_size)):
+                tpoints = points[i : i + batch_size].clone()
+                tpoints = tpoints.to(device=device)
                 _, sample_vals_sh = self.sample(
-                    points[i : i + batch_size],
+                    tpoints,
                     grid_coords=True,
                     want_colors=True
                 )
+                del tpoints
+                sample_vals_sh= sample_vals_sh.to(device=torch.device("cpu"))
                 all_sample_vals_sh.append(sample_vals_sh)
-
-            sample_vals_sh = torch.cat(all_sample_vals_sh, dim=0) if len(all_sample_vals_sh) else torch.empty_like(self.sh_data[:0])
+            
+            #pretty much last moving around of data to cpu for the logic part.
+            #all_sample_vals_sh = all_sample_vals_sh.to(device=torch.device("cpu"))
+            #self.sh_data = self.sh_data.to(device=torch.device("cpu"))
+            if len(all_sample_vals_sh):
+                sample_vals_sh = torch.cat(all_sample_vals_sh, dim=0)
+            else:
+                sample_vals_sh = torch.empty_like(self.sh_data[:0],device=torch.device("cpu") )#otherwise uses the gpu like sh_data does. doubling its data.
             del self.density_data
             del self.sh_data
             del all_sample_vals_sh
@@ -2166,6 +2202,7 @@ class SparseGrid(nn.Module):
     def _get_data_grads(self):
         ret = []
         for subitem in ["density_data", "sh_data", "basis_data", "background_data"]:
+            #print("subitem",subitem)
             param = self.__getattr__(subitem)
             if not param.requires_grad:
                 ret.append(torch.zeros_like(param.data))
@@ -2177,6 +2214,7 @@ class SparseGrid(nn.Module):
                 ):
                     if hasattr(param, "grad"):
                         del param.grad
+                    print("param shape:",param.data.shape,subitem)
                     param.grad = torch.zeros_like(param.data)
                 ret.append(param.grad)
         return ret

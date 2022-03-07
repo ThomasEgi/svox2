@@ -78,7 +78,7 @@ group.add_argument('--background_reso', type=int, default=512, help='Background 
 group = parser.add_argument_group("optimization")
 group.add_argument('--n_iters', type=int, default=10 * 12800, help='total number of iters to optimize for')
 group.add_argument('--batch_size', type=int, default=
-                     5000,
+                     1000,
                      #100000,
                      #  2000,
                    help='batch size')
@@ -179,9 +179,9 @@ group.add_argument('--background_density_thresh', type=float,
                     default=1.0+1e-9,
                    help='Background sigma threshold for sparsification')
 group.add_argument('--max_grid_elements', type=int,
-                    default=44_000_000,
+                    default=2_500_000,
                    help='Max items to store after upsampling '
-                        '(the number here is given for 22GB memory)')
+                        '(the number 44mio here is given for 22GB memory, 3mio for 4GB with 256^3 link-array,)')
 
 group.add_argument('--tune_mode', action='store_true', default=False,
                    help='hypertuning mode (do not save, for speed)')
@@ -273,7 +273,7 @@ dset = datasets[args.dataset_type](
                factor=factor,
                n_images=args.n_train,
                **config_util.build_data_options(args))
-
+dset.rays.gt = dset.rays.gt.to(device=torch.device("cpu"))
 if args.background_nlayers > 0 and not dset.should_use_background:
     warn('Using a background model for dataset type ' + str(type(dset)) + ' which typically does not use background')
 
@@ -282,10 +282,11 @@ dset_test = datasets[args.dataset_type](
 
 global_start_time = datetime.now()
 
+print("using sphere?:",dset.use_sphere_bound and not args.nosphereinit)
 grid = svox2.SparseGrid(reso=reso_list[reso_id],
                         center=dset.scene_center,
-                        radius=dset.scene_radius,
-                        use_sphere_bound=dset.use_sphere_bound and not args.nosphereinit,
+                        radius=list(np.array(dset.scene_radius)*.25),
+                        use_sphere_bound=False,#dset.use_sphere_bound and not args.nosphereinit,
                         basis_dim=args.sh_dim,
                         use_z_order=True,
                         device=device,
@@ -475,6 +476,11 @@ while True:
         print('Train step')
         pbar = tqdm(enumerate(range(0, epoch_size, args.batch_size)), total=batches_per_epoch)
         stats = {"mse" : 0.0, "psnr" : 0.0, "invsqr_mse" : 0.0}
+        try:
+            print("raydevice:",dset.rays.gt.get_device())
+        except Exception as e:
+            print("error or cpu:",e)
+        
         for iter_id, batch_begin in pbar:
             gstep_id = iter_id + gstep_id_base
             if args.lr_fg_begin_step > 0 and gstep_id == args.lr_fg_begin_step:
@@ -492,7 +498,11 @@ while True:
             batch_end = min(batch_begin + args.batch_size, epoch_size)
             batch_origins = dset.rays.origins[batch_begin: batch_end]
             batch_dirs = dset.rays.dirs[batch_begin: batch_end]
+            
             rgb_gt = dset.rays.gt[batch_begin: batch_end]
+            rgb_gt = rgb_gt.detach().clone()
+            rgb_gt = rgb_gt.to(device=device)
+            
             rays = svox2.Rays(batch_origins, batch_dirs)
 
             #  with Timing("volrend_fused"):
@@ -601,7 +611,7 @@ while True:
                 elif grid.basis_type == svox2.BASIS_TYPE_MLP:
                     optim_basis_mlp.step()
                     optim_basis_mlp.zero_grad()
-
+        
     train_step()
     gc.collect()
     gstep_id_base += batches_per_epoch
