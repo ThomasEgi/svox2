@@ -92,6 +92,10 @@ struct CameraSpec {
 
   float ndc_coeffx;
   float ndc_coeffy;
+  
+  float rad3_0;
+  float rad3_1;
+  float rad3_2;
 
   inline void check() {
     CHECK_INPUT(c2w);

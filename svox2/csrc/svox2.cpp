@@ -134,7 +134,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("width", &CameraSpec::width)
       .def_readwrite("height", &CameraSpec::height)
       .def_readwrite("ndc_coeffx", &CameraSpec::ndc_coeffx)
-      .def_readwrite("ndc_coeffy", &CameraSpec::ndc_coeffy);
+      .def_readwrite("ndc_coeffy", &CameraSpec::ndc_coeffy)
+      .def_readwrite("rad3_0", &CameraSpec::rad3_0)
+      .def_readwrite("rad3_1", &CameraSpec::rad3_1)
+      .def_readwrite("rad3_2", &CameraSpec::rad3_2);
 
   py::class_<RaysSpec>(m, "RaysSpec")
       .def(py::init<>())

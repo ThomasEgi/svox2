@@ -85,7 +85,10 @@ struct PackedCameraSpec {
         fx(cam.fx), fy(cam.fy),
         cx(cam.cx), cy(cam.cy),
         width(cam.width), height(cam.height),
-        ndc_coeffx(cam.ndc_coeffx), ndc_coeffy(cam.ndc_coeffy) {}
+        ndc_coeffx(cam.ndc_coeffx), ndc_coeffy(cam.ndc_coeffy),
+        rad3_0(cam.rad3_0),
+        rad3_1(cam.rad3_1),
+        rad3_2(cam.rad3_2) {}
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits>
         c2w;
     float fx;
@@ -97,6 +100,10 @@ struct PackedCameraSpec {
 
     float ndc_coeffx;
     float ndc_coeffy;
+    
+    float rad3_0;
+    float rad3_1;
+    float rad3_2;
 };
 
 struct PackedRaysSpec {

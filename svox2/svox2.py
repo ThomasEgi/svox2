@@ -113,7 +113,10 @@ class Camera:
     height: int = 800
 
     ndc_coeffs: Union[Tuple[float, float], List[float]] = (-1.0, -1.0)
-
+    rad3_0: float = 0
+    rad3_1: float = 0
+    rad3_2: float = 0
+    
     @property
     def fx_val(self):
         return self.fx
@@ -148,6 +151,9 @@ class Camera:
         spec.height = self.height
         spec.ndc_coeffx = self.ndc_coeffs[0]
         spec.ndc_coeffy = self.ndc_coeffs[1]
+        spec.rad3_0 = self.rad3_0
+        spec.rad3_1 = self.rad3_1
+        spec.rad3_2 = self.rad3_2
         return spec
 
     @property
@@ -167,6 +173,19 @@ class Camera:
         xx = (xx - self.cx_val) / self.fx_val
         yy = (yy - self.cy_val) / self.fy_val
         zz = torch.ones_like(xx)
+        
+        #using radial3 model.
+        r2 = xx*xx + yy*yy
+        r4 = r2*r2
+        r6 = r4*r2
+        r =  torch.ones_like(xx) + self.rad3_0*r2 + self.rad3_1*r4 + self.rad3_2*r6
+            
+        #let's skip p1 and p2 parameters
+        #dx = 2*p1*x0*y0 + p2*(r2 + 2*x0*x0) 
+        #dy = p1*(r2 + 2*y0*y0) + 2*p2*x0*y0
+        xx = xx*r#+dx
+        yy = yy*r#+dy
+        
         dirs = torch.stack((xx, yy, zz), dim=-1)   # OpenCV
         del xx, yy, zz
         dirs /= torch.norm(dirs, dim=-1, keepdim=True)

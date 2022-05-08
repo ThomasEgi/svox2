@@ -2,9 +2,12 @@ from .nerf_dataset import NeRFDataset
 from .llff_dataset import LLFFDataset
 from .nsvf_dataset import NSVFDataset
 from .co3d_dataset import CO3DDataset
+from .mero_dataset import MeRoDataset
 from os import path
+from pathlib import Path
 
 def auto_dataset(root : str, *args, **kwargs):
+    p = Path(root)
     if path.isfile(path.join(root, 'apple', 'eval_batches_multisequence.json')):
         print("Detected CO3D dataset")
         return CO3DDataset(root, *args, **kwargs)
@@ -15,6 +18,9 @@ def auto_dataset(root : str, *args, **kwargs):
          path.isfile(path.join(root, 'transforms_train.json')):
         print("Detected NeRF (Blender) dataset")
         return NeRFDataset(root, *args, **kwargs)
+    elif path.isdir(root) and len([x for x in p.iterdir() if x.suffix ==".mg"])==1:
+        return MeRoDataset(root, *args, **kwargs)
+
     else:
         print("Defaulting to extended NSVF dataset")
         return NSVFDataset(root, *args, **kwargs)
@@ -24,5 +30,6 @@ datasets = {
     'llff': LLFFDataset,
     'nsvf': NSVFDataset,
     'co3d': CO3DDataset,
+    'mero': MeRoDataset,
     'auto': auto_dataset
 }

@@ -402,7 +402,10 @@ while True:
                                    dset_test.intrins.get('cy', img_id),
                                    width=dset_test.get_image_size(img_id)[1],
                                    height=dset_test.get_image_size(img_id)[0],
-                                   ndc_coeffs=dset_test.ndc_coeffs)
+                                   ndc_coeffs=dset_test.ndc_coeffs,
+                                   rad3_0 = dset_test.camdists[i][0],
+                                   rad3_1 = dset_test.camdists[i][1],
+                                   rad3_2 = dset_test.camdists[i][2])
                 rgb_pred_test = grid.volume_render_image(cam, use_kernel=True)
                 rgb_gt_test = dset_test.gt[img_id].to(device=device)
                 all_mses = ((rgb_gt_test - rgb_pred_test) ** 2).cpu()
